@@ -25,15 +25,8 @@ print(mat["columns"])
 
 print("\nNumber of column labels:")
 print(len(mat["columns"][0]))
-# Stored column labels:
-# subno, block, ns, time, stimseq, imageseq, folderseq, iterseq,
-# corAseq, choice, key, cor, rew, rt, condition (HC=0,SZ=1), pcor,
-# delay
 
 X = mat["expe_data"]
-
-print("\nFirst 10 rows of raw expe_data:")
-print(X[:10])
 
 column_names = [
     "subject", "block", "set_size", "time", "stimulus", "image", "folder",
@@ -43,7 +36,11 @@ column_names = [
 
 df = pd.DataFrame(X, columns=column_names)
 
-int_cols = ["subject", "block", "set_size", "time", "stimulus", "iteration", "correct_action", "choice", "correct"]
+int_cols = [
+    "subject", "block", "set_size", "time", "stimulus",
+    "iteration", "correct_action", "choice", "correct"
+]
+
 for col in int_cols:
     df[col] = df[col].astype("Int64")
 
@@ -57,15 +54,12 @@ print("======================================")
 
 print("\nShape:")
 print(df.shape)
-# (53573, 17)
 
 print("\nNumber of participants:")
 print(df["subject"].nunique())
-# 79
 
 print("\nCondition values:")
 print(df["condition"].value_counts(dropna=False).sort_index())
-# condition is NaN for all trials
 
 # ============================================================
 # BLOCK METADATA
@@ -86,9 +80,25 @@ block_summary = (
 )
 
 block_summary["stimuli_match_setsize"] = block_summary["n_stimuli"] == block_summary["set_size"]
+
 block_summary = block_summary.sort_values(["subject", "block"])
-block_summary["block_order"] = block_summary.groupby("subject").cumcount() + 1
-block_summary["set_size_exposure"] = block_summary.groupby(["subject", "set_size"]).cumcount() + 1
+
+block_summary["block_order"] = (
+    block_summary.groupby("subject").cumcount() + 1
+)
+
+block_summary["set_size_exposure"] = (
+    block_summary.groupby(["subject", "set_size"]).cumcount() + 1
+)
+
+block_summary["n_blocks_total"] = (
+    block_summary.groupby("subject")["block_order"].transform("max")
+)
+
+block_summary["normalized_block_position"] = (
+    (block_summary["block_order"] - 1) /
+    (block_summary["n_blocks_total"] - 1)
+)
 
 # ============================================================
 # BLOCK / SET-SIZE STRUCTURE
@@ -100,75 +110,141 @@ print("======================================")
 
 print("\nBlocks per participant:")
 print(block_summary.groupby("subject").size().value_counts().sort_index())
-# all 79 participants have 18 blocks
 
-setsize_counts = block_summary.groupby(["subject", "set_size"]).size().unstack(fill_value=0)
+setsize_counts = (
+    block_summary
+    .groupby(["subject", "set_size"])
+    .size()
+    .unstack(fill_value=0)
+)
 
 print("\nSet-size counts per participant:")
 print(setsize_counts.head(10))
 
 print("\nUnique set-size-count patterns:")
 print(setsize_counts.value_counts())
-# each participant has 18 blocks and is missing one block relative
-# to the nominal 19-block design
 
 print("\nTotal number of blocks of each set size:")
 print(block_summary["set_size"].value_counts().sort_index())
-# set size 2: 447
-# set size 3: 296
-# set size 4: 226
-# set size 5: 226
-# set size 6: 227
 
 print("\nCheck n_stimuli == set_size:")
 print(block_summary["stimuli_match_setsize"].value_counts())
-# all 1422 blocks have n_stimuli == set_size
-
-print("\nObserved trial counts by set size:")
-for ns in sorted(block_summary["set_size"].dropna().unique()):
-    vals = sorted(block_summary.loc[block_summary["set_size"] == ns, "n_trials"].unique())
-    print(f"ns={int(ns)}: {vals}")
-# blocks in the same set size have different trial counts
 
 # ============================================================
-# CHRONOLOGICAL SET-SIZE ORDER
+# CHRONOLOGY OF SET-SIZE EXPOSURES
 # ============================================================
 
-print("\n======================================")
-print("CHRONOLOGICAL SET-SIZE ORDER")
-print("======================================")
-
-for subject in block_summary["subject"].drop_duplicates().head(10):
-    temp = block_summary[block_summary["subject"] == subject].sort_values("block_order")
-    print(f"Subject {subject}: {temp['set_size'].astype(int).tolist()}")
-
-# ============================================================
-# WHERE EACH SET-SIZE EXPOSURE USUALLY OCCURS
-# ============================================================
-
-exposure_positions = block_summary.groupby(
-    ["set_size", "set_size_exposure"], as_index=False
-).agg(
-    mean_block_order=("block_order", "mean"),
-    median_block_order=("block_order", "median"),
-    min_block_order=("block_order", "min"),
-    max_block_order=("block_order", "max"),
-    n_participants=("subject", "nunique")
+exposure_positions = (
+    block_summary
+    .groupby(["set_size", "set_size_exposure"], as_index=False)
+    .agg(
+        mean_block_order=("block_order", "mean"),
+        median_block_order=("block_order", "median"),
+        min_block_order=("block_order", "min"),
+        max_block_order=("block_order", "max"),
+        mean_normalized_position=("normalized_block_position", "mean"),
+        sd_normalized_position=("normalized_block_position", "std"),
+        n_participants=("subject", "nunique")
+    )
 )
 
 print("\n======================================")
-print("WHERE EACH SET-SIZE EXPOSURE USUALLY OCCURS")
+print("CHRONOLOGY OF SET-SIZE EXPOSURES")
 print("======================================")
 
-print("\nThe overall estimated chronological position of each set-size exposure:")
 print(exposure_positions.to_string(index=False))
+
+chronology_mean_matrix = exposure_positions.pivot(
+    index="set_size",
+    columns="set_size_exposure",
+    values="mean_normalized_position"
+)
+
+chronology_sd_matrix = exposure_positions.pivot(
+    index="set_size",
+    columns="set_size_exposure",
+    values="sd_normalized_position"
+)
+
+print("\nMean normalized position matrix:")
+print(chronology_mean_matrix)
+
+print("\nSD normalized position matrix:")
+print(chronology_sd_matrix)
+
+# ============================================================
+# MAPPING COMPOSITION
+# ============================================================
+
+stimulus_mapping = (
+    df.dropna(subset=["subject", "block", "stimulus", "correct_action"])
+    .groupby(["subject", "block", "stimulus"], as_index=False)
+    .agg(correct_action=("correct_action", "first"))
+)
+
+action_counts = (
+    stimulus_mapping
+    .groupby(["subject", "block", "correct_action"])
+    .size()
+    .unstack(fill_value=0)
+)
+
+for action in [1, 2, 3]:
+    if action not in action_counts.columns:
+        action_counts[action] = 0
+
+action_counts = action_counts[[1, 2, 3]]
+
+action_counts["mapping_composition"] = action_counts.apply(
+    lambda row: "-".join(
+        map(str, sorted(row.astype(int).tolist(), reverse=True))
+    ),
+    axis=1
+)
+
+mapping_blocks = (
+    block_summary
+    .merge(
+        action_counts["mapping_composition"].reset_index(),
+        on=["subject", "block"],
+        how="left"
+    )
+)
+
+mapping_counts = (
+    mapping_blocks
+    .groupby(
+        ["set_size", "set_size_exposure", "mapping_composition"],
+        as_index=False
+    )
+    .size()
+    .rename(columns={"size": "n_blocks"})
+)
+
+mapping_counts["proportion"] = (
+    mapping_counts["n_blocks"] /
+    mapping_counts.groupby(
+        ["set_size", "set_size_exposure"]
+    )["n_blocks"].transform("sum")
+)
+
+print("\n======================================")
+print("MAPPING COMPOSITION BY EXPOSURE")
+print("======================================")
+
+print(mapping_counts.to_string(index=False))
 
 # ============================================================
 # PUBLIC 18-BLOCK DATASET VS NOMINAL 19-BLOCK DESIGN
 # ============================================================
 
 target_counts = pd.Series({2: 6, 3: 4, 4: 3, 5: 3, 6: 3})
-setsize_counts_for_deficit = setsize_counts.reindex(columns=target_counts.index, fill_value=0)
+
+setsize_counts_for_deficit = setsize_counts.reindex(
+    columns=target_counts.index,
+    fill_value=0
+)
+
 deficits = target_counts - setsize_counts_for_deficit
 
 print("\n======================================")
@@ -177,33 +253,46 @@ print("======================================")
 
 print("\nUnique deficit patterns:")
 print(deficits.value_counts())
-# every participant is missing exactly one block relative to the
-# nominal 19-block design
 
 print("\nParticipants whose total deficit is exactly one block:")
 print(f"{int((deficits.sum(axis=1) == 1).sum())} / {len(deficits)}")
-# 79 / 79
 
 print("\nAny participant has more than the nominal count for a set size?")
 print(bool((deficits < 0).any().any()))
-# False
 
 one_block_deficit = deficits[deficits.sum(axis=1) == 1]
+
 if not one_block_deficit.empty:
     omitted_setsize = one_block_deficit.idxmax(axis=1)
+
     print("\nSet size of the one-block deficit:")
     print(omitted_setsize.value_counts().sort_index())
-# set size 2: 27 participants
-# set size 3: 20 participants
-# set size 4: 11 participants
-# set size 5: 11 participants
-# set size 6: 10 participants
 
 # ============================================================
 # SAVE CSVs
 # ============================================================
 
-block_summary.to_csv(OUTPUT_DIR / "expe1_block_summary.csv", index=False)
-exposure_positions.to_csv(OUTPUT_DIR / "expe1_exposure_positions.csv", index=False)
+block_summary.to_csv(
+    OUTPUT_DIR / "expe1_block_summary.csv",
+    index=False
+)
+
+exposure_positions.to_csv(
+    OUTPUT_DIR / "expe1_exposure_positions.csv",
+    index=False
+)
+
+chronology_mean_matrix.to_csv(
+    OUTPUT_DIR / "expe1_chronology_mean_matrix.csv"
+)
+
+chronology_sd_matrix.to_csv(
+    OUTPUT_DIR / "expe1_chronology_sd_matrix.csv"
+)
+
+mapping_counts.to_csv(
+    OUTPUT_DIR / "expe1_mapping_composition_long.csv",
+    index=False
+)
 
 print(f"\nSaved inspection outputs to: {OUTPUT_DIR}")
